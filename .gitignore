@@ -1,0 +1,39 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Model artifacts (large binary files)
+*.pkl
+*.joblib
+
+# Raw data (large CSVs — download via kaggle)
+data/raw/*.csv
+data/raw/*.zip
+
+# Numpy feature arrays
+data/features/*.npy
+
+# Environment variables — never commit secrets
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Generated reports
+reports/audit_pdfs/*.pdf
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
