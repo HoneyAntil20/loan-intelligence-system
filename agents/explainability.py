@@ -8,8 +8,10 @@ import os
 import datetime
 from agents.state import LoanState
 
-# ── LangChain / Anthropic ────────────────────────────────────────────────────
-from langchain_anthropic import ChatAnthropic
+# ── LangChain / Google Gemini ─────────────────────────────────────────────────
+from dotenv import load_dotenv
+load_dotenv()
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 
 # ── PDF generation ───────────────────────────────────────────────────────────
@@ -23,41 +25,40 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 AUDIT_PDF_DIR = "reports/audit_pdfs"
 os.makedirs(AUDIT_PDF_DIR, exist_ok=True)
 
-# Initialise Claude — model loaded once at module level
-_llm = ChatAnthropic(model="claude-3-5-haiku-20241022", max_tokens=400)
+_llm = None
+
+def _get_llm():
+    global _llm
+    if _llm is None:
+        _llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", max_output_tokens=200)
+    return _llm
 
 
 def _build_narrative_prompt(state: LoanState) -> str:
-    """
-    Build a structured prompt for Claude to generate a 150-word audit explanation.
-    Strictly constrained to SHAP values and decision — no hallucination surface.
-    """
+    """Build a concise prompt for Gemini to generate a 100-word audit explanation."""
     shap_top3 = state.get("shap_top3") or []
-    shap_lines = "\n".join(
-        f"  - {f['feature']}: value={f['value']:.2f}, SHAP={f['shap_value']:.4f} ({f['direction']})"
+    shap_lines = ", ".join(
+        f"{f['feature']}={f['shap_value']:+.3f}"
         for f in shap_top3
     )
-    return f"""You are a credit risk compliance officer writing a regulatory audit explanation.
-Write a plain-English explanation (maximum 150 words) for the following loan decision.
-You MUST only reference the SHAP features listed below. Do not invent other reasons.
-
-Decision: {state.get('decision', 'N/A')}
-Reason: {state.get('decision_reason', 'N/A')}
-Default Probability: {state.get('default_probability', 'N/A')}
-Fraud Score: {state.get('fraud_score', 'N/A')}
-Uplift Segment: {state.get('segment', 'N/A')}
-
-Top 3 SHAP factors driving the credit risk score:
-{shap_lines}
-
-Write the explanation now:"""
+    default_prob = state.get("default_probability") or 0.0
+    fraud_score = state.get("fraud_score") or 0.0
+    return (
+        f"Write a 80-word plain-English loan decision explanation for a compliance audit.\n"
+        f"Decision: {state.get('decision')} | "
+        f"Default prob: {default_prob:.1%} | "
+        f"Fraud score: {fraud_score:.2f} | "
+        f"Segment: {state.get('segment')}\n"
+        f"Top SHAP factors: {shap_lines}\n"
+        f"Only reference the SHAP factors listed. Be factual and concise."
+    )
 
 
 def _generate_narrative(state: LoanState) -> str:
-    """Call Claude to generate the audit narrative. Returns plain text."""
+    """Call Gemini to generate the audit narrative. Returns plain text."""
     try:
         prompt = _build_narrative_prompt(state)
-        response = _llm.invoke([HumanMessage(content=prompt)])
+        response = _get_llm().invoke([HumanMessage(content=prompt)])
         narrative = response.content.strip()
 
         # Post-generation validation: ensure top features are mentioned
@@ -68,13 +69,21 @@ def _generate_narrative(state: LoanState) -> str:
 
         return narrative
     except Exception as e:
-        # Fallback: template-based narrative if LLM fails
+        # Fallback: clean template-based narrative if LLM fails
+        default_prob = state.get("default_probability") or 0.0
+        fraud_score = state.get("fraud_score") or 0.0
+        decision = state.get("decision", "N/A")
+        segment = state.get("segment", "N/A")
+        shap_top3 = state.get("shap_top3") or []
+        shap_summary = "; ".join(
+            f"{f['feature']} ({f['direction'].replace('_', ' ')})"
+            for f in shap_top3[:3]
+        ) or "no SHAP data available"
         return (
-            f"Decision: {state.get('decision', 'N/A')}. "
-            f"Default probability: {state.get('default_probability', 'N/A'):.2%}. "
-            f"Fraud score: {state.get('fraud_score', 'N/A'):.2f}. "
-            f"Uplift segment: {state.get('segment', 'N/A')}. "
-            f"[LLM narrative unavailable: {e}]"
+            f"The loan application was {decision.replace('_', ' ')}. "
+            f"The applicant's default probability was {default_prob:.1%} with a fraud score of {fraud_score:.2f}. "
+            f"The uplift model placed this applicant in the '{segment}' segment. "
+            f"Key risk factors: {shap_summary}."
         )
 
 
@@ -115,9 +124,15 @@ def _generate_pdf(state: LoanState, narrative: str, app_id: str) -> str:
     story.append(Paragraph("Risk Scores", styles["Heading2"]))
     score_data = [
         ["Metric", "Value", "Band/Level"],
-        ["Default Probability", f"{state.get('default_probability', 'N/A'):.2%}" if state.get('default_probability') else "N/A", state.get("risk_band", "N/A")],
-        ["Fraud Score", f"{state.get('fraud_score', 'N/A'):.4f}" if state.get('fraud_score') else "N/A", state.get("risk_level", "N/A")],
-        ["Uplift Score (ITE)", f"{state.get('uplift_score', 'N/A'):.4f}" if state.get('uplift_score') else "N/A", state.get("segment", "N/A")],
+        ["Default Probability",
+         f"{state['default_probability']:.2%}" if state.get('default_probability') is not None else "N/A",
+         state.get("risk_band", "N/A")],
+        ["Fraud Score",
+         f"{state['fraud_score']:.4f}" if state.get('fraud_score') is not None else "N/A",
+         state.get("risk_level", "N/A")],
+        ["Uplift Score (ITE)",
+         f"{state['uplift_score']:.4f}" if state.get('uplift_score') is not None else "N/A",
+         state.get("segment", "N/A")],
     ]
     score_table = Table(score_data, colWidths=[6*cm, 4*cm, 5*cm])
     score_table.setStyle(TableStyle([

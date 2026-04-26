@@ -5,8 +5,22 @@ Run: uvicorn api.main:app --reload --port 8000
 """
 
 import os
+import sys
 import json
+import traceback
+import warnings
 from contextlib import asynccontextmanager
+
+# ── Ensure CWD is the project root so relative artifact paths resolve ─────────
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_HERE)
+os.chdir(_PROJECT_ROOT)
+sys.path.insert(0, _PROJECT_ROOT)
+
+# Suppress sklearn feature name warnings — we intentionally use numpy arrays
+warnings.filterwarnings("ignore", message="X does not have valid feature names")
+warnings.filterwarnings("ignore", message="LightGBM binary classifier with TreeExplainer")
+warnings.filterwarnings("ignore", message="'force_all_finite' was renamed")
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -38,6 +52,7 @@ async def lifespan(app: FastAPI):
         print("✓ All model artifacts loaded successfully.")
     except Exception as e:
         print(f"✗ Model loading failed: {e}")
+        traceback.print_exc()
         _models_loaded = False
     yield
     # Shutdown: nothing to clean up for in-memory models

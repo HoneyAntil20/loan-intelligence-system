@@ -59,11 +59,16 @@ def main():
     # ── Train LightGBM with class weight ─────────────────────────────────────
     print("Training LightGBM fraud classifier...")
     model = LGBMClassifier(
-        n_estimators=300,
+        n_estimators=1000,
         scale_pos_weight=spw,
-        max_depth=7,
-        learning_rate=0.05,
-        num_leaves=63,
+        max_depth=8,
+        learning_rate=0.03,
+        num_leaves=127,
+        min_child_samples=20,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=0.1,
+        reg_lambda=0.1,
         n_jobs=-1,
         random_state=42,
         verbose=-1,

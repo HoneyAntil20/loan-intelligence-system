@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 st.title("🏦 Multi-Agent Loan Intelligence System")
-st.caption("Powered by LangGraph · LightGBM · X-Learner · SHAP · Claude")
+st.caption("Powered by LangGraph · LightGBM · X-Learner · SHAP · Gemini")
 
 # ── Sidebar: Application Input Form ──────────────────────────────────────────
 with st.sidebar:
@@ -67,9 +67,12 @@ if submit:
 
     with st.spinner("Running multi-agent evaluation..."):
         try:
-            resp = httpx.post(f"{API_BASE}/evaluate-loan", json=payload, timeout=30.0)
+            resp = httpx.post(f"{API_BASE}/evaluate-loan", json=payload, timeout=120.0)
             resp.raise_for_status()
             data = resp.json()
+        except httpx.ReadTimeout:
+            st.error("Request timed out after 120s. The server may be overloaded — try again.")
+            st.stop()
         except httpx.ConnectError:
             st.error("Cannot connect to API. Make sure the FastAPI server is running on port 8000.")
             st.stop()
@@ -91,13 +94,13 @@ if submit:
     col1, col2, col3 = st.columns(3)
     with col1:
         dp = data.get("default_probability")
-        st.metric("Default Probability", f"{dp:.2%}" if dp else "N/A", delta=data.get("risk_band"))
+        st.metric("Default Probability", f"{dp:.2%}" if dp is not None else "N/A", delta=data.get("risk_band"))
     with col2:
         fs = data.get("fraud_score")
-        st.metric("Fraud Score", f"{fs:.4f}" if fs else "N/A", delta=data.get("risk_level"))
+        st.metric("Fraud Score", f"{fs:.4f}" if fs is not None else "N/A", delta=data.get("risk_level"))
     with col3:
         us = data.get("uplift_score")
-        st.metric("Uplift Score (ITE)", f"{us:.4f}" if us else "N/A", delta=data.get("segment"))
+        st.metric("Uplift Score (ITE)", f"{us:.4f}" if us is not None else "N/A", delta=data.get("segment"))
 
     # ── SHAP bar chart ────────────────────────────────────────────────────────
     shap_top3 = data.get("shap_top3")
@@ -115,7 +118,7 @@ if submit:
 
     # ── PDF download ──────────────────────────────────────────────────────────
     pdf_url = data.get("audit_pdf_url")
-    if pdf_url:
+    if pdf_url is not None:
         try:
             pdf_resp = httpx.get(f"{API_BASE}{pdf_url}", timeout=10.0)
             st.download_button(

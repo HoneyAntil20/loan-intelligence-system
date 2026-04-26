@@ -130,10 +130,11 @@ def main():
     drop_cols = ["SK_ID_CURR", target_col]
     feature_cols = [c for c in df.columns if c not in drop_cols]
 
-    # Encode categoricals as integer codes for numpy storage
-    cat_cols_present = [c for c in feature_cols if df[c].dtype.name == "category"]
-    for col in cat_cols_present:
-        df[col] = df[col].cat.codes
+    # Encode ALL non-numeric columns using select_dtypes (works with pandas 3.x)
+    # cat.codes returns -1 for NaN rows — convert back to NaN for the imputer
+    non_numeric_cols = df[feature_cols].select_dtypes(exclude=[np.number]).columns.tolist()
+    for col in non_numeric_cols:
+        df[col] = df[col].astype("category").cat.codes.astype(float).replace(-1, np.nan)
 
     X = df[feature_cols].copy()
 

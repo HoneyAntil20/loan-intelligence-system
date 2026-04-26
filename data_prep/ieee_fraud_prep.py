@@ -23,9 +23,6 @@ FEATURES_DIR = "data/features"
 ARTIFACTS_DIR = "models/artifacts"
 METRICS_DIR = "models/metrics"
 
-# Columns to cast as pandas Categorical (LightGBM handles natively)
-CAT_COLS = ["ProductCD", "card4", "card6", "P_emaildomain", "DeviceType"]
-
 # Missing-value threshold — drop columns with more than this fraction missing
 MISSING_THRESHOLD = 0.80
 
@@ -55,15 +52,7 @@ def drop_high_missingness(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def cast_categoricals(df: pd.DataFrame) -> pd.DataFrame:
-    """Cast known categorical columns to pandas Categorical dtype for LightGBM."""
-    for col in CAT_COLS:
-        if col in df.columns:
-            df[col] = df[col].astype("category")
-    return df
-
-
-def compute_class_weight(y: pd.Series) -> float:
+def compute_class_weight(y: np.ndarray) -> float:
     """Compute scale_pos_weight = neg_count / pos_count for imbalanced binary classification."""
     neg = (y == 0).sum()
     pos = (y == 1).sum()
@@ -84,37 +73,35 @@ def main():
     # ── Drop high-missingness columns ────────────────────────────────────────
     df = drop_high_missingness(df)
 
-    # ── Cast categoricals ────────────────────────────────────────────────────
-    df = cast_categoricals(df)
-
-    # ── Median-impute remaining numeric columns ──────────────────────────────
     target_col = "isFraud"
     drop_cols = ["TransactionID", target_col]
     feature_cols = [c for c in df.columns if c not in drop_cols]
 
-    # Separate numeric and categorical for imputation
-    num_cols = [c for c in feature_cols if df[c].dtype != "category"]
-    cat_cols_present = [c for c in feature_cols if df[c].dtype == "category"]
+    # ── Encode ALL string/object columns as integer category codes ────────────
+    # pandas 3.x uses StringDtype for string columns — use select_dtypes to catch both
+    str_cols = [c for c in feature_cols
+                if df[c].dtype == object or str(df[c].dtype) in ("string", "StringDtype")
+                or hasattr(df[c].dtype, 'name') and 'string' in str(df[c].dtype).lower()]
 
+    # Safer: just check non-numeric columns directly
+    non_numeric_cols = df[feature_cols].select_dtypes(exclude=[np.number]).columns.tolist()
+    for col in non_numeric_cols:
+        df[col] = df[col].astype("category").cat.codes.astype(float)
+        df[col] = df[col].replace(-1, np.nan)  # cat.codes uses -1 for NaN rows
+
+    # ── Median-impute all remaining NaNs (all cols are now numeric) ───────────
     imputer = SimpleImputer(strategy="median")
-    df[num_cols] = imputer.fit_transform(df[num_cols])
+    X = imputer.fit_transform(df[feature_cols]).astype(np.float32)
+    y = df[target_col].values
 
-    # ── Save cleaned parquet ─────────────────────────────────────────────────
+    # ── Save cleaned parquet (before numpy conversion) ────────────────────────
     df.to_parquet(PROCESSED_PATH, index=False)
     print(f"  Saved: {PROCESSED_PATH}")
 
     # ── Compute and save class weight ────────────────────────────────────────
-    spw = compute_class_weight(df[target_col])
+    spw = compute_class_weight(y)
     with open(f"{METRICS_DIR}/fraud_class_weight.json", "w") as f:
         json.dump({"scale_pos_weight": spw}, f, indent=2)
-
-    # ── Prepare feature matrix ───────────────────────────────────────────────
-    # Encode categoricals as integer codes for numpy storage
-    for col in cat_cols_present:
-        df[col] = df[col].cat.codes
-
-    X = df[feature_cols].values.astype(np.float32)
-    y = df[target_col].values
 
     # ── Train/test split ─────────────────────────────────────────────────────
     X_train, X_test, y_train, y_test = train_test_split(
@@ -130,7 +117,7 @@ def main():
         np.save(f"{FEATURES_DIR}/fraud_{name}.npy", arr)
     print(f"  Saved 4 numpy arrays to {FEATURES_DIR}/")
 
-    # ── Save feature names ───────────────────────────────────────────────────
+    # ── Save feature names and imputer ───────────────────────────────────────
     joblib.dump(feature_cols, f"{ARTIFACTS_DIR}/fraud_feature_names.pkl")
     joblib.dump(imputer, f"{ARTIFACTS_DIR}/fraud_imputer.pkl")
     print(f"  Saved feature names and imputer to {ARTIFACTS_DIR}/")
